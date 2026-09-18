@@ -1,0 +1,17 @@
+# Local Claude Code session config
+.claude/
+
+# Gradle / Android
+android/.gradle/
+android/local.properties
+android/**/build/
+android/**/.cxx/
+*.hprof
+
+# Nim build output
+nim-src/*/build/
+nim-src/*/nimcache/
+nim-src/*/nimbledeps/
+
+# Scratch build artifacts staged from CI
+build/

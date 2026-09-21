@@ -1,0 +1,3 @@
+[submodule "nim-src/logos-delivery"]
+	path = nim-src/logos-delivery
+	url = https://github.com/logos-messaging/logos-delivery

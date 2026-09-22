@@ -41,6 +41,16 @@ echo "==> Building for ABIs: ${ABIS[*]}"
 
 for abi in "${ABIS[@]}"; do
   echo "==> [$abi] logos-delivery"
+  # x86/x86_64 need the vendored Leopard-RS CMakeLists.txt patched before
+  # the compile step (see scripts/patch-leopard-android-x86.sh for the full
+  # root-cause writeup) -- populate nimbledeps/ first via `make deps` if it
+  # isn't there yet, so the patch has something to act on, then patch,
+  # *then* run the real per-ABI build (whose own `deps` prerequisite will
+  # then be a no-op).
+  if [[ "$abi" == "x86_64" || "$abi" == "x86" ]]; then
+    make -C "$DELIVERY_DIR" deps
+    "$REPO_ROOT/scripts/patch-leopard-android-x86.sh"
+  fi
   make -C "$DELIVERY_DIR" "${DELIVERY_MAKE_TARGET[$abi]}" ANDROID_TARGET="$ANDROID_TARGET"
 
   echo "==> [$abi] logos-storage-nim"

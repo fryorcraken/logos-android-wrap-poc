@@ -10,7 +10,7 @@ import com.fryorcraken.logos.common.NativeCallback
  *
  * Reconciled against the real generated header (Milestone 3):
  * `library/generated/logosdelivery.h`, emitted by nim-ffi's `genBindings()`
- * from `library/*.nim`'s `{.ffi.}`-annotated procs — not checked into
+ * from `library`'s `.nim` source's `{.ffi.}`-annotated procs — not checked into
  * logos-messaging/logos-delivery, built fresh by
  * `scripts/build-jni-shims.sh` before `delivery_jni.c` is compiled against
  * it. That header's typed helper layer (`logosdelivery_ctx_create`,

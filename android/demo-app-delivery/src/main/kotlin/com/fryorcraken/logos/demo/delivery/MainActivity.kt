@@ -22,7 +22,9 @@ import androidx.compose.ui.unit.dp
 import com.fryorcraken.logos.common.LogosException
 import com.fryorcraken.logos.common.NativeCallback
 import com.fryorcraken.logos.delivery.DeliveryNode
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import org.json.JSONObject
 
 /**
@@ -57,8 +59,14 @@ private fun DeliveryDemoScreen() {
 
     DisposableEffect(Unit) {
         val connectedPeers = AtomicInteger(0)
-        @Volatile var node: DeliveryNode? = null
-        var stopped = false
+        // AtomicReference/AtomicBoolean, not a plain var: node/stopped are
+        // written on one thread (worker, or the Compose thread in
+        // onDispose) and read on the other — @Volatile only applies to
+        // class-level fields in Kotlin, not local variables, so a plain
+        // `var` (with or without @Volatile) gives no cross-thread
+        // visibility guarantee here.
+        val node = AtomicReference<DeliveryNode?>(null)
+        val stopped = AtomicBoolean(false)
 
         val worker = Thread {
             try {
@@ -68,12 +76,12 @@ private fun DeliveryDemoScreen() {
                 // extra config to find peers.
                 val configJson = """{"preset": "logos.dev"}"""
                 val newNode = DeliveryNode(configJson)
-                if (stopped) {
+                if (stopped.get()) {
                     // onDispose already fired before create finished.
                     runCatching { newNode.destroy() }
                     return@Thread
                 }
-                node = newNode
+                node.set(newNode)
 
                 newNode.addEventListener(
                     "onConnectionChange",
@@ -114,8 +122,8 @@ private fun DeliveryDemoScreen() {
         worker.start()
 
         onDispose {
-            stopped = true
-            node?.let { current -> Thread { runCatching { current.destroy() } }.start() }
+            stopped.set(true)
+            node.get()?.let { current -> Thread { runCatching { current.destroy() } }.start() }
         }
     }
 

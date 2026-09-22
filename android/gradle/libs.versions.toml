@@ -1,9 +1,9 @@
 [versions]
 agp = "9.4.0"
 kotlin = "2.4.20"
-compileSdk = "36"
+compileSdk = "37"
 minSdk = "26"
-targetSdk = "36"
+targetSdk = "37"
 # Must match nim-src/logos-storage-nim's android_ndk_release / logos-delivery's
 # Android build — both native libraries and this Gradle project need to agree
 # on the exact NDK build, since jniLibs are prebuilt and staged in, not

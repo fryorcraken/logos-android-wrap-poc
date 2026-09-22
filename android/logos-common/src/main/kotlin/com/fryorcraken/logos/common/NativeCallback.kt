@@ -9,7 +9,7 @@ package com.fryorcraken.logos.common
  * size_t len, void *userData)`. The JNI shim in each native-lib module
  * (`logos-delivery`, `logos-storage`) is what actually bridges a C function
  * pointer to a call into an implementation of this interface — see each
- * module's `src/jni/*.c` and docs/adr/0003-jni-shim-per-module.md for how
+ * module's `src/jni/` C sources and docs/adr/0003-jni-shim-per-module.md for how
  * that bridging handles the native library's own background event thread.
  *
  * `retCode` follows each library's own RET_* convention (0 = OK by

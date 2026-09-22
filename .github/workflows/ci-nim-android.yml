@@ -1,0 +1,107 @@
+name: CI — Nim Android build (delivery)
+
+# Reusable workflow: cross-compiles liblogosdelivery.so (+ librln.so +
+# libdelivery_jni.so) for the two ABIs verified locally (arm64-v8a,
+# x86_64 -- see docs/adr and the root README for why x86/armeabi-v7a are not
+# attempted for delivery yet). Called by release.yml, and directly runnable
+# via workflow_dispatch for iteration without cutting a real release.
+#
+# Storage is deliberately NOT built here. logos-storage's JNI shim
+# (storage_jni.c) does not exist yet (Milestone 4) -- this workflow is
+# delivery-only by design, not by oversight.
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+env:
+  # NDK r27c: the exact version every local build was verified against (see
+  # android/gradle/libs.versions.toml's `ndk` version and the root README).
+  # Downloaded directly from Google's NDK archive rather than through
+  # android-actions/setup-android's `sdkmanager --install ndk;...` path --
+  # that path bootstraps sdkmanager via a legacy `tools` package that no
+  # longer exists in current Android SDK repository metadata and hard-fails
+  # before any NDK install happens. Confirmed first-hand in
+  # fryorcraken/logos-storage-nim's android-build.yml (commit f0bbeb96).
+  android_ndk_release: r27c
+  android_target: "30"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  build-delivery:
+    name: liblogosdelivery-android (${{ matrix.abi }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - abi: arm64-v8a
+          - abi: x86_64
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Download Android NDK ${{ env.android_ndk_release }}
+        run: |
+          curl -fsSL -o ndk.zip \
+            "https://dl.google.com/android/repository/android-ndk-${{ env.android_ndk_release }}-linux.zip"
+          unzip -q ndk.zip
+          echo "ANDROID_NDK_HOME=${PWD}/android-ndk-${{ env.android_ndk_release }}" >> "$GITHUB_ENV"
+
+      # Nim itself is NOT bootstrapped here: nim-src/logos-delivery's own
+      # Makefile self-installs the pinned Nim 2.2.6 + Nimble
+      # (install-nim/install-nimble targets, driven by
+      # scripts/install_nim.sh) the first time `make deps`/`build-deps` runs
+      # -- which scripts/build-nim-android.sh already calls before every ABI
+      # build. This is the same mechanism delivery's own upstream CI relies
+      # on (see nim-src/logos-delivery/.github/actions/nimble-deps), so no
+      # separate choosenim-based setup step is added here.
+      - name: Cache nimbledeps
+        uses: actions/cache@v4
+        with:
+          path: |
+            nim-src/logos-delivery/nimbledeps/
+            nim-src/logos-delivery/nimble.paths
+            ~/.nimble/pkgcache
+          key: ${{ runner.os }}-nimbledeps-delivery-v1-${{ hashFiles('nim-src/logos-delivery/nimble.lock', 'nim-src/logos-delivery/logos_delivery.nimble') }}
+
+      # RLN's Android cross-compile (scripts/build_rln_android.sh) shells out
+      # to `cross` (cargo-cross), which cross-compiles the vendored zerokit
+      # Rust crate inside Docker images bundling their own NDK toolchain.
+      # ubuntu-latest ships Docker preinstalled, so no separate Docker setup
+      # step is needed -- but budget real time for this step (~10-15 min per
+      # ABI, verified locally).
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build liblogosdelivery.so, librln.so, libdelivery_jni.so (${{ matrix.abi }})
+        run: |
+          bash scripts/build-nim-android.sh ${{ matrix.abi }}
+        env:
+          ANDROID_TARGET: ${{ env.android_target }}
+
+      - name: Verify outputs
+        run: |
+          set -euo pipefail
+          delivery_so="nim-src/logos-delivery/build/android/${{ matrix.abi }}/liblogosdelivery.so"
+          rln_so="nim-src/logos-delivery/build/android/${{ matrix.abi }}/librln.so"
+          shim_so="build/jni/${{ matrix.abi }}/libdelivery_jni.so"
+          for f in "$delivery_so" "$rln_so" "$shim_so"; do
+            test -f "$f" || { echo "::error::$f was not produced"; exit 1; }
+            file "$f"
+          done
+
+      - name: Upload liblogosdelivery.so + librln.so + libdelivery_jni.so (${{ matrix.abi }})
+        uses: actions/upload-artifact@v4
+        with:
+          name: delivery-android-${{ matrix.abi }}
+          path: |
+            nim-src/logos-delivery/build/android/${{ matrix.abi }}/liblogosdelivery.so
+            nim-src/logos-delivery/build/android/${{ matrix.abi }}/librln.so
+            build/jni/${{ matrix.abi }}/libdelivery_jni.so
+          if-no-files-found: error

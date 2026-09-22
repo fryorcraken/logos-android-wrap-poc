@@ -1,0 +1,177 @@
+name: Release
+
+# Triggered by publishing a GitHub Release. Builds demo-app-delivery's
+# release APK from source (Nim libraries + JNI shim + Gradle), verifies it
+# structurally excludes logos-storage's native code, reports its size, and
+# attaches it to the release that triggered the run.
+#
+# Scope: delivery only. logos-storage's JNI shim does not exist yet
+# (Milestone 4 is not started -- see the root README's "Current status"
+# note), so demo-app-full is NOT built or published here. Building it would
+# require storage_jni.c, which this repo does not have.
+#
+# workflow_dispatch is also wired so the pipeline can be iterated on without
+# creating/deleting real GitHub Releases each time (it just skips the
+# publish-assets job, which requires a real release tag).
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-nim:
+    name: Build Nim libraries (delivery)
+    uses: ./.github/workflows/ci-nim-android.yml
+
+  stage-and-build-apk:
+    name: Stage jniLibs + build demo-app-delivery APK
+    needs: build-nim
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Download arm64-v8a artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: delivery-android-arm64-v8a
+          path: /tmp/artifacts/arm64-v8a
+
+      - name: Download x86_64 artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: delivery-android-x86_64
+          path: /tmp/artifacts/x86_64
+
+      # actions/download-artifact flattens each artifact into the given path
+      # (it does not preserve the uploader's own working-directory-relative
+      # subpaths across artifact boundaries the way a single shared upload
+      # would). Reassemble the exact directory layout
+      # scripts/stage-jnilibs.sh expects, per ABI:
+      #   nim-src/logos-delivery/build/android/<abi>/{liblogosdelivery.so,librln.so}
+      #   build/jni/<abi>/libdelivery_jni.so
+      - name: Reassemble build output layout for staging
+        run: bash scripts/ci/reassemble-nim-artifacts.sh
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Download Android NDK r27c (for llvm-strip during staging)
+        run: |
+          curl -fsSL -o ndk.zip \
+            "https://dl.google.com/android/repository/android-ndk-r27c-linux.zip"
+          unzip -q ndk.zip
+          echo "ANDROID_NDK_HOME=${PWD}/android-ndk-r27c" >> "$GITHUB_ENV"
+
+      - name: Stage jniLibs
+        run: bash scripts/stage-jnilibs.sh arm64-v8a x86_64
+
+      # android/gradle/libs.versions.toml pins compileSdk/targetSdk to 37,
+      # required by the pinned Compose BOM (2026.09.00). android-actions/
+      # setup-android's default platform install lags behind what's needed
+      # here, and has a documented history in this project's sibling repo
+      # (fryorcraken/logos-storage-nim) of its sdkmanager bootstrap breaking
+      # outright (missing legacy `tools` package) -- so the SDK platform and
+      # build-tools are installed directly via `sdkmanager` from the
+      # command-line-tools package instead of relying on that action to pick
+      # the right version.
+      - name: Install Android SDK platform 37 + build-tools
+        run: bash scripts/ci/install-android-sdk.sh
+
+      # Reuse the standard Android debug keystore for release signing (see
+      # the code comment in demo-app-delivery/build.gradle.kts for the full
+      # rationale). It doesn't exist yet on a fresh CI runner -- generate a
+      # throwaway one with keytool using the same well-known
+      # alias/passwords AGP itself uses, matching what a local dev machine's
+      # `~/.android/debug.keystore` already has after any `assembleDebug`.
+      - name: Generate debug keystore
+        run: bash scripts/ci/generate-debug-keystore.sh
+
+      - name: Build demo-app-delivery release APK
+        working-directory: android
+        run: ./gradlew :demo-app-delivery:assembleRelease --stacktrace
+
+      - name: Locate APK
+        id: apk
+        run: |
+          apk_path="$(find android/demo-app-delivery/build/outputs/apk/release -name '*.apk' | head -1)"
+          test -n "$apk_path" || { echo "::error::No APK found under android/demo-app-delivery/build/outputs/apk/release"; exit 1; }
+          echo "path=$apk_path" >> "$GITHUB_OUTPUT"
+
+      - name: Rename APK for publishing
+        run: |
+          mkdir -p dist
+          cp "${{ steps.apk.outputs.path }}" dist/demo-app-delivery-release.apk
+
+      - name: Upload demo-app-delivery-release.apk (build artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: demo-app-delivery-release-apk
+          path: dist/demo-app-delivery-release.apk
+          if-no-files-found: error
+
+  verify-apk-composition:
+    name: Verify delivery APK excludes storage native code
+    needs: stage-and-build-apk
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v6
+
+      - name: Download APK
+        uses: actions/download-artifact@v4
+        with:
+          name: demo-app-delivery-release-apk
+          path: dist
+
+      - name: Verify no storage-related .so in the delivery APK
+        run: bash scripts/verify-no-storage-in-delivery-apk.sh dist/demo-app-delivery-release.apk
+
+  report-sizes:
+    name: Report APK sizes
+    needs: stage-and-build-apk
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v6
+
+      - name: Download APK
+        uses: actions/download-artifact@v4
+        with:
+          name: demo-app-delivery-release-apk
+          path: dist
+
+      - name: Report APK sizes
+        run: bash scripts/report-apk-sizes.sh dist/demo-app-delivery-release.apk
+
+  publish-assets:
+    name: Publish APK to the GitHub Release
+    needs: [verify-apk-composition, report-sizes]
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download APK
+        uses: actions/download-artifact@v4
+        with:
+          name: demo-app-delivery-release-apk
+          path: dist
+
+      - name: Upload APK to release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" \
+            dist/demo-app-delivery-release.apk \
+            --repo "${{ github.repository }}" \
+            --clobber

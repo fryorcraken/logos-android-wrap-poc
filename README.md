@@ -23,6 +23,27 @@ The point of this repo is to prove, end to end, that:
    storage) can be layered on top without breaking guarantee #2 for apps
    that don't need it.
 
+## Current status
+
+- **`logos-delivery` is fully wired and verified end to end**: real JNI
+  shim, real cross-compiled `.so`'s, and `demo-app-delivery` has been run on
+  a real Android emulator showing live peer connections against the real
+  `logos.dev` network. `release.yml` builds and publishes its APK from
+  scratch on every GitHub Release.
+- **`logos-storage`'s JNI shim does not exist yet** — Milestone 4 (writing
+  `storage_jni.c`) has not started. `logos-glue` and `demo-app-full` are
+  still Milestone-2-era stubs and do not build a working, runnable app.
+  Neither is built or published by `release.yml` currently — see "Release
+  process" below.
+- **Only `arm64-v8a` and `x86_64` are supported right now**, for both
+  libraries — not the full four-ABI matrix this doc otherwise describes as
+  the eventual target. `x86`/`armeabi-v7a` have never been attempted for
+  delivery. For storage, 32-bit ABIs are blocked by a real upstream bug in
+  storage's own source (see the module map below and
+  `docs/adr/0002-fork-storage-nim-for-android.md`) — modern Android devices
+  are effectively all 64-bit regardless, so this is not considered
+  blocking for the POC.
+
 ## This is a collection of independent Kotlin libraries, not one SDK dependency
 
 This repo publishes **four separate Kotlin/AAR artifacts** under the group
@@ -31,7 +52,7 @@ This repo publishes **four separate Kotlin/AAR artifacts** under the group
 | Artifact | Depends on | Bundles |
 |---|---|---|
 | `com.fryorcraken.logos:common` | *(nothing in this repo)* | no native code |
-| `com.fryorcraken.logos:delivery` | `common` | `liblogosdelivery.so`, `librln.so`, `libpq.so` |
+| `com.fryorcraken.logos:delivery` | `common` | `liblogosdelivery.so`, `librln.so` |
 | `com.fryorcraken.logos:storage` | `common` | `libstorage.so` |
 | `com.fryorcraken.logos:glue` | `delivery`, `storage` | no native code of its own |
 
@@ -117,7 +138,7 @@ the fact. See `scripts/verify-no-storage-in-delivery-apk.sh` and the
 | Module | Gradle path | Depends on | Bundles | Purpose |
 |---|---|---|---|---|
 | `logos-common` | `:logos-common` | — | — | Shared opaque-ctx + async-callback plumbing both native libraries use |
-| `logos-delivery` | `:logos-delivery` | `logos-common` | `liblogosdelivery.so`, `librln.so`, `libpq.so` | Logos Messaging node: lifecycle, events, channels |
+| `logos-delivery` | `:logos-delivery` | `logos-common` | `liblogosdelivery.so`, `librln.so` | Logos Messaging node: lifecycle, events, channels |
 | `logos-storage` | `:logos-storage` | `logos-common` | `libstorage.so` | Logos Storage node: lifecycle, peers, upload/download |
 | `logos-glue` | `:logos-glue` | `logos-delivery`, `logos-storage` | — | **Template** for cross-library glue code (e.g. `getCombinedStatus()`); the pattern future lez/l1 glue modules should follow |
 | `demo-app-delivery` | `:demo-app-delivery` | `logos-delivery` only | — | Starts a delivery node, shows live peer count |
@@ -141,18 +162,54 @@ Prerequisites:
 
 ```bash
 git submodule update --init --recursive
-./scripts/build-nim-android.sh   # cross-compiles both Nim libs + JNI shims, all 4 ABIs
-./scripts/stage-jnilibs.sh       # copies the resulting .so's into each module's jniLibs/
-cd android && ./gradlew assembleDebug
+./scripts/build-nim-android.sh arm64-v8a x86_64   # cross-compiles delivery + JNI shim for the verified ABIs
+./scripts/stage-jnilibs.sh arm64-v8a x86_64       # copies the resulting .so's into logos-delivery's jniLibs/
+cd android && ./gradlew :demo-app-delivery:assembleDebug
 ```
+
+(`build-nim-android.sh`/`stage-jnilibs.sh` accept `x86`/`armeabi-v7a` too,
+and will attempt `logos-storage-nim`'s matching Makefile targets for any
+ABI passed — but see "Current status" above for why only `arm64-v8a`/
+`x86_64` are actually verified working today, and why `demo-app-full` does
+not build regardless of which ABIs are staged.)
 
 ## Release process
 
-Publishing a GitHub Release triggers `.github/workflows/release.yml`, which:
-builds both Nim libraries from source for all 4 ABIs, compiles the JNI
-shims, assembles both demo APKs, verifies `demo-app-delivery`'s APK does not
-contain `libstorage.so` (failing the release if it does), reports APK sizes,
-and attaches both APKs to the release.
+Publishing a GitHub Release triggers `.github/workflows/release.yml`, which
+today is **delivery-only** (storage's JNI shim doesn't exist yet — see
+"Current status" above). It:
+
+1. Calls the reusable `.github/workflows/ci-nim-android.yml` workflow to
+   cross-compile `liblogosdelivery.so`, `librln.so`, and the compiled
+   `delivery_jni.c` shim from source, for `arm64-v8a` and `x86_64` (a
+   matrix job, one per ABI). This includes bootstrapping the pinned Nim
+   2.2.6 toolchain (via `nim-src/logos-delivery`'s own `make deps`),
+   downloading Android NDK r27c directly, and cross-compiling `librln.so`
+   via `cross`/Docker.
+2. Stages the resulting `.so`'s into
+   `android/logos-delivery/src/main/jniLibs/<abi>/` via
+   `scripts/stage-jnilibs.sh`, then builds `demo-app-delivery`'s release
+   APK with `./gradlew :demo-app-delivery:assembleRelease`. The release
+   build type is signed with a debug keystore (POC-appropriate only — see
+   the signing config comment in `demo-app-delivery/build.gradle.kts`), not
+   a dedicated production keystore.
+3. Verifies the built APK structurally excludes any storage-related native
+   library via `scripts/verify-no-storage-in-delivery-apk.sh`, failing the
+   release if one is found. This is the single most important CI check in
+   this repo — see "Why not one library with build-time exclusion" above.
+4. Reports per-ABI native library sizes via `scripts/report-apk-sizes.sh`
+   to the workflow run's job summary.
+5. Attaches `demo-app-delivery-release.apk` to the GitHub Release that
+   triggered the run.
+
+`demo-app-full` (which would need both `logos-delivery` and
+`logos-storage`) is not built or published by this pipeline — it can't be:
+`logos-glue`/`demo-app-full` are still Milestone-2-era stubs, and
+`logos-storage` has no JNI shim yet. Wiring storage into this pipeline is
+future Milestone 4/5 work.
+
+`release.yml` also accepts `workflow_dispatch`, so the pipeline can be
+iterated on and re-run without creating/deleting real GitHub Releases.
 
 ## Nim source
 
@@ -166,6 +223,25 @@ The two native libraries are tracked as git submodules under `nim-src/`:
   that adds Android cross-compilation support (`make libstorage-android`)
   not yet available upstream. Everything else in the fork is unmodified
   upstream code.
+
+Two more forks exist as **reference/documentation only** — neither is a
+submodule of this repo, and CI does not clone them directly:
+
+- [`fryorcraken/leopard`](https://github.com/fryorcraken/leopard) and
+  [`fryorcraken/nim-leopard`](https://github.com/fryorcraken/nim-leopard)
+  document, in a real reviewable diff, the fix for an Android
+  `x86`/`x86_64` NDK cross-compile failure in the vendored Leopard-RS
+  Reed-Solomon library that `logos-delivery` pulls in transitively (via
+  `status-im/nim-leopard` → `status-im/leopard`, resolved into
+  `nim-src/logos-delivery/nimbledeps/`). Since `logos-delivery` itself is
+  deliberately not forked (see `docs/adr/0002`), this repo's actual build
+  does not consume those forks via a git dependency swap — instead,
+  `scripts/patch-leopard-android-x86.sh` mechanically re-applies the
+  identical, small `CMakeLists.txt` edit directly to whatever
+  `nimbledeps/` already resolved, immediately before the x86_64 build step
+  (`scripts/build-nim-android.sh` calls it automatically). See that
+  script's own top-of-file comment for the full root-cause writeup and
+  rationale for a scripted patch over a dependency-level fork.
 
 ## License
 

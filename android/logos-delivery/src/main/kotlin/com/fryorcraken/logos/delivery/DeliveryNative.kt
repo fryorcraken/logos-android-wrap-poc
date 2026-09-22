@@ -4,19 +4,29 @@ import com.fryorcraken.logos.common.NativeCallback
 
 /**
  * `external fun` bridge to `libdelivery_jni.so`, the hand-written JNI shim
- * that wraps `liblogosdelivery.so`'s plain-C exports (see
+ * that wraps `liblogosdelivery.so`'s C FFI (see
  * docs/adr/0003-jni-shim-per-module.md for why a shim is required — Nim's
  * exported symbols don't follow JNI naming conventions).
  *
- * STUB (Milestone 2): `libdelivery_jni.so` does not exist yet — it's written
- * in Milestone 3 against the *generated* `generated/logosdelivery.h`
- * (liblogosdelivery.nim generates the bulk of its C API at build time; the
- * checked-in `library/liblogosdelivery.h` only declares the event-listener
- * ABI). Method names/signatures below are provisional: they establish the
- * module's Kotlin surface and package structure now (renaming later means
- * renaming every exported JNI symbol too, see docs/adr/0003 section 5.3),
- * but will be reconciled against the real generated header before the shim
- * is written.
+ * Reconciled against the real generated header (Milestone 3):
+ * `library/generated/logosdelivery.h`, emitted by nim-ffi's `genBindings()`
+ * from `library/*.nim`'s `{.ffi.}`-annotated procs — not checked into
+ * logos-messaging/logos-delivery, built fresh by
+ * `scripts/build-jni-shims.sh` before `delivery_jni.c` is compiled against
+ * it. That header's typed helper layer (`logosdelivery_ctx_create`,
+ * `_ctx_start_node`, `_ctx_stop_node`, `_ctx_destroy`, ...) is entirely
+ * **asynchronous** — every call submits a CBOR-encoded request and returns
+ * immediately, with the terminal result delivered later via callback from
+ * nim-ffi's dispatch thread. This contradicts Milestone 2's stub, which
+ * assumed (per the comment that used to be on [com.fryorcraken.logos.common
+ * .NodeLifecycle]) that delivery's node lifecycle was synchronous, unlike
+ * storage's. It is not: both wrapped libraries turn out to have fully async
+ * C APIs. `delivery_jni.c` blocks the calling thread on a native condvar
+ * until each callback fires, so these `external fun`s present the same
+ * synchronous-return-plus-callback shape [com.fryorcraken.logos.storage
+ * .StorageNative] already established for storage's own async API — every
+ * lifecycle call here now also takes a [NativeCallback], matching that
+ * pattern.
  */
 internal object DeliveryNative {
     init {
@@ -24,13 +34,20 @@ internal object DeliveryNative {
         System.loadLibrary("delivery_jni")
     }
 
-    /** Returns an opaque native context pointer, or 0 on failure. */
-    external fun nativeCreate(configJson: String): Long
+    /**
+     * Returns an opaque native context pointer (a `LogosDeliveryCtx*`), or 0
+     * on failure. [callback] receives the terminal `logosdelivery_ctx_create`
+     * result (retCode 0 = success) once the native call completes — the
+     * shim blocks until then, so by the time this function returns,
+     * [callback] has already been invoked exactly once.
+     */
+    external fun nativeCreate(configJson: String, callback: NativeCallback): Long
 
-    external fun nativeStart(ctx: Long): Int
+    external fun nativeStart(ctx: Long, callback: NativeCallback): Int
 
-    external fun nativeStop(ctx: Long): Int
+    external fun nativeStop(ctx: Long, callback: NativeCallback): Int
 
+    /** Synchronous: `logosdelivery_ctx_destroy` is a plain blocking C call. */
     external fun nativeDestroy(ctx: Long)
 
     /** Returns a non-zero listener id (0 = registration failed). */

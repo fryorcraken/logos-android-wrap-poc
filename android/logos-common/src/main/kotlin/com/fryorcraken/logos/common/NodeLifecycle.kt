@@ -6,6 +6,15 @@ package com.fryorcraken.logos.common
  * both wrap a native library whose C API follows the same
  * create/start/stop/destroy pattern around an opaque context pointer.
  *
+ * Both wrapped libraries' native C APIs are fully asynchronous (every call
+ * submits a request and returns immediately, with the result delivered
+ * later via callback — confirmed for delivery in Milestone 3 against its
+ * real generated header, contradicting an earlier assumption here that
+ * delivery's lifecycle was synchronous unlike storage's). Each `*Node`
+ * class's own JNI shim blocks the calling thread until the corresponding
+ * native callback fires, so [start]/[stop] below stay synchronous from a
+ * Kotlin caller's point of view despite the native API's asynchrony.
+ *
  * This interface intentionally has no knowledge of either concrete node's
  * native library or JNI shim — it exists so shared, library-agnostic code
  * (e.g. a future glue module reasoning about "is this node running") can be

@@ -8,6 +8,12 @@ android/**/build/
 android/**/.cxx/
 *.hprof
 
+# Native libraries staged by scripts/stage-jnilibs.sh from Nim/NDK build
+# output (scripts/build-nim-android.sh + scripts/build-jni-shims.sh) -- build
+# artifacts, not source; regenerate with those scripts rather than committing
+# the .so's directly (see docs/adr/0003-jni-shim-per-module.md).
+android/**/src/main/jniLibs/
+
 # Nim build output
 nim-src/*/build/
 nim-src/*/nimcache/

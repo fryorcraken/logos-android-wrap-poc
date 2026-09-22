@@ -61,3 +61,62 @@ other packages them.
   later (e.g. contributors who only touch Kotlin/JNI code), a CMake-based
   build remains a reasonable follow-up — this decision defers it as
   unnecessary complexity for the current scope, not as permanently rejected.
+
+## Addendum (Milestone 3): delivery's generated header has two layers, and
+## its Android build task only emits one
+
+Building `nim-src/logos-delivery`'s `liblogosdelivery.so` for Android
+(`libLogosDeliveryAndroid` in `logos_delivery.nimble`) produces a header via
+`--header`, but that flag alone only emits the *raw* CBOR-ABI exports
+(`logosdelivery_create_node(reqCbor, reqCborLen, callback, userData)` and
+friends — every argument crosses as an opaque CBOR-encoded buffer). The
+*typed* helper layer documented in `library/README.md` and used by every
+reference shim this milestone checked (`logosdelivery_ctx_create(const char
+*configJson, ...)`, `_ctx_start_node`, `_ctx_subscribe`, ...) is a second,
+separate codegen pass, gated behind three extra defines
+(`-d:ffiGenBindings -d:targetLang=c -d:ffiOutputDir=library/generated
+-d:ffiSrcPath=...`) that delivery's *desktop* `buildLibrary` nimble task
+passes but its *Android* `buildMobileAndroid` task does not. This looks like
+a gap in the upstream Android task, not something specific to this fork's
+build.
+
+`delivery_jni.c` is written against the typed layer (plain C strings in/out,
+no hand-rolled CBOR encoding in the shim). `scripts/build-jni-shims.sh`
+therefore reruns the equivalent `nim c` invocation with those three defines
+added, immediately before compiling `delivery_jni.c`, rather than patching
+the pinned submodule (out of scope — delivery is not forked, see ADR 0002).
+This second `nim c` run reuses the same source tree, `nimbledeps/`, and
+`nimble.paths` the main per-ABI build already populated, so it is a relink
+of already-resolved dependencies (confirmed by wall-clock time: comparable
+to a warm rebuild, not a fresh one) rather than a second full build.
+
+Two knock-on consequences for the shim's own build:
+
+- The typed layer's inline `static inline` encoders/decoders `#include
+  <tinycbor/cbor.h>`, so `delivery_jni.c` — despite not calling any CBOR
+  function directly itself — must compile against nim-ffi's vendored
+  TinyCBOR headers (`nimbledeps/pkgs2/ffi-*/ffi/codegen/templates/cpp/vendor/tinycbor/`)
+  and link a small static archive built from five of its `.c` files
+  (`cborencoder.c`, `cborencoder_close_container_checked.c`, `cborparser.c`,
+  `cborparser_dup_string.c`, `cborerrorstrings.c` — the same set
+  `TinyCbor.mk`'s host-arch `tinycbor` target builds, just cross-compiled
+  for the target ABI here). The resulting `libdelivery_jni.so` has no
+  runtime TinyCBOR dependency — it's a build-time-only static link.
+- Delivery's generated typed API is **fully asynchronous**: every
+  `logosdelivery_ctx_*` call submits a request and returns immediately, with
+  the terminal result delivered later via callback from nim-ffi's own
+  dispatch thread. `delivery_jni.c` blocks the calling JVM thread on a
+  `pthread_cond_t` inside each lifecycle trampoline so `DeliveryNative`'s
+  `external fun`s present the same synchronous-return-plus-callback shape
+  `StorageNative`/`StorageNode` already use for storage's own (also fully
+  async) C API — this was a real, corrected assumption from Milestone 2's
+  stub, not a pre-existing design decision; see `DeliveryNode.kt`'s and
+  `NodeLifecycle.kt`'s doc comments.
+
+**For Milestone 4 (storage):** `libstorage.h` is fully hand-written and
+checked in (no generated-header step, no CBOR layer), so `storage_jni.c`
+skips this whole addendum's first two points — but its own C API is already
+known to be async (`StorageNode.kt`'s stub already documents this), so the
+pthread-condvar blocking pattern in `delivery_jni.c`'s
+`nativeCreate`/`nativeStart`/`nativeStop` is directly reusable there with
+`storage_new`/`storage_start`/`storage_stop`'s reply shapes substituted in.

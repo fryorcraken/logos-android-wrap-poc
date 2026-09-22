@@ -19,9 +19,30 @@ android {
         versionName = "0.1.0"
     }
 
+    // POC-appropriate signing only: the release build type reuses the
+    // standard Android debug keystore (~/.android/debug.keystore, created
+    // automatically by AGP/adb the first time it's needed -- including
+    // freshly on a CI runner, so no key material needs to be committed or
+    // provisioned as a GitHub Secret). This makes assembleRelease produce an
+    // installable APK instead of an unsigned one, which is all this POC's
+    // release pipeline needs. It is explicitly NOT a production signing
+    // setup: a real release build must use a dedicated, secret-managed
+    // release keystore. Setting one up (GitHub Secrets, Play App Signing,
+    // etc.) is a deliberately out-of-scope open item for this proof of
+    // concept -- see the root README's release process section.
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("${System.getProperty("user.home")}/.android/debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
 

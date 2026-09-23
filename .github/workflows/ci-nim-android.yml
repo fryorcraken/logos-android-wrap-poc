@@ -53,14 +53,29 @@ jobs:
           unzip -q ndk.zip
           echo "ANDROID_NDK_HOME=${PWD}/android-ndk-${{ env.android_ndk_release }}" >> "$GITHUB_ENV"
 
-      # Nim itself is NOT bootstrapped here: nim-src/logos-delivery's own
-      # Makefile self-installs the pinned Nim 2.2.6 + Nimble
-      # (install-nim/install-nimble targets, driven by
-      # scripts/install_nim.sh) the first time `make deps`/`build-deps` runs
-      # -- which scripts/build-nim-android.sh already calls before every ABI
-      # build. This is the same mechanism delivery's own upstream CI relies
-      # on (see nim-src/logos-delivery/.github/actions/nimble-deps), so no
-      # separate choosenim-based setup step is added here.
+      # Nim itself is NOT bootstrapped via a separate choosenim-based action:
+      # nim-src/logos-delivery's own Makefile self-installs the pinned Nim
+      # 2.2.6 + Nimble (install-nim/install-nimble targets, driven by
+      # scripts/install_nim.sh/install_nimble.sh) the first time `make
+      # deps`/`build-deps` runs. This is the same mechanism delivery's own
+      # upstream CI relies on (see
+      # nim-src/logos-delivery/.github/actions/nimble-deps).
+      #
+      # That said, it needs to run as its own explicit step here, before
+      # scripts/build-nim-android.sh: the Makefile's own `export PATH :=
+      # $(NIMBLE_TOOLDIR):$(HOME)/.nimble/bin:$(PATH)` only affects `make`'s
+      # own subprocess environment, not subsequent GitHub Actions steps'
+      # PATH -- and scripts/build-jni-shims.sh (called by
+      # build-nim-android.sh right after the Nim library itself builds)
+      # invokes `nim c` directly, not through `make`. Without this, that
+      # step fails with "nim: command not found" (confirmed in CI) even
+      # though the Nim library build immediately before it succeeded.
+      - name: Bootstrap Nim + Nimble toolchain
+        run: |
+          make -C nim-src/logos-delivery deps
+          echo "$HOME/.nimble/bin" >> "$GITHUB_PATH"
+          make -C nim-src/logos-delivery print-nimble-path >> "$GITHUB_PATH"
+
       - name: Cache nimbledeps
         uses: actions/cache@v4
         with:

@@ -43,12 +43,19 @@ for abi in "${ABIS[@]}"; do
   echo "==> [$abi] logos-delivery"
   # x86/x86_64 need the vendored Leopard-RS CMakeLists.txt patched before
   # the compile step (see scripts/patch-leopard-android-x86.sh for the full
-  # root-cause writeup) -- populate nimbledeps/ first via `make deps` if it
-  # isn't there yet, so the patch has something to act on, then patch,
-  # *then* run the real per-ABI build (whose own `deps` prerequisite will
-  # then be a no-op).
+  # root-cause writeup) -- populate nimbledeps/ first via `make build-deps`
+  # (NOT `make deps`: `deps` only bootstraps the Nim/Nimble toolchain itself
+  # -- `deps: | nimble` -- it never runs `nimble setup --localdeps`, so
+  # nimbledeps/pkgs2/ stays empty and the patch below is a silent no-op;
+  # `build-deps` is the target that actually resolves nimble.lock into
+  # nimbledeps/. Confirmed in CI: with plain `deps`, the x86_64 build
+  # reliably hit the exact `_mm_loadu_si128` failure this patch exists to
+  # prevent, because it was patching a package directory that didn't exist
+  # yet) if it isn't there yet, so the patch has something to act on, then
+  # patch, *then* run the real per-ABI build (whose own `build-deps`
+  # prerequisite will then be a no-op).
   if [[ "$abi" == "x86_64" || "$abi" == "x86" ]]; then
-    make -C "$DELIVERY_DIR" deps
+    make -C "$DELIVERY_DIR" build-deps
     "$REPO_ROOT/scripts/patch-leopard-android-x86.sh"
   fi
   make -C "$DELIVERY_DIR" "${DELIVERY_MAKE_TARGET[$abi]}" ANDROID_TARGET="$ANDROID_TARGET"

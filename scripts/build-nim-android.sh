@@ -53,8 +53,20 @@ for abi in "${ABIS[@]}"; do
   fi
   make -C "$DELIVERY_DIR" "${DELIVERY_MAKE_TARGET[$abi]}" ANDROID_TARGET="$ANDROID_TARGET"
 
-  echo "==> [$abi] logos-storage-nim"
-  make -C "$STORAGE_DIR" "${STORAGE_MAKE_TARGET[$abi]}" ANDROID_TARGET="$ANDROID_TARGET"
+  # nim-src/logos-storage-nim is not a submodule of this repo (only
+  # nim-src/logos-delivery is -- see .gitmodules); it's only present at all
+  # on a machine that has separately cloned the fryorcraken/logos-storage-nim
+  # fork alongside this repo for local storage-side iteration. A fresh clone
+  # / CI checkout has no such directory, and that's expected, not an error --
+  # skip the storage build gracefully rather than hard-failing the whole
+  # script (and, in turn, callers that only want delivery, e.g.
+  # .github/workflows/ci-nim-android.yml, which is delivery-only by design).
+  if [[ -d "$STORAGE_DIR" ]]; then
+    echo "==> [$abi] logos-storage-nim"
+    make -C "$STORAGE_DIR" "${STORAGE_MAKE_TARGET[$abi]}" ANDROID_TARGET="$ANDROID_TARGET"
+  else
+    echo "==> [$abi] skipping logos-storage-nim: $STORAGE_DIR not present (not a submodule of this repo; expected on a fresh clone / delivery-only CI)"
+  fi
 done
 
 if [[ -x "$REPO_ROOT/scripts/build-jni-shims.sh" ]]; then

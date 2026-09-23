@@ -45,8 +45,18 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DELIVERY_DIR="$REPO_ROOT/nim-src/logos-delivery"
 
+# `find` on a nonexistent nimbledeps/pkgs2/ (e.g. a fresh clone/CI runner
+# where only the Nim/Nimble toolchain has been bootstrapped so far, before
+# `nimble setup --localdeps` has ever resolved any dependency) exits 1 and,
+# under `set -euo pipefail`, that nonzero status propagates through the
+# `| head -1` pipeline into this command substitution and aborts the whole
+# script right here -- before the intended "no leopard-* package found,
+# skipping" message below ever gets a chance to run. `|| true` on the `find`
+# keeps that a soft, expected case instead of a hard, silent-looking
+# failure (verified in CI: this previously took down the calling
+# build-nim-android.sh with no error output at all).
 leopard_cmake=$(find "$DELIVERY_DIR/nimbledeps/pkgs2" -maxdepth 1 -iname "leopard-*" -type d 2>/dev/null \
-  | head -1)
+  | head -1 || true)
 
 if [[ -z "$leopard_cmake" ]]; then
   echo "==> No leopard-* package found under nimbledeps/pkgs2/ -- skipping (run 'make deps' first if x86/x86_64 Android build is needed)."

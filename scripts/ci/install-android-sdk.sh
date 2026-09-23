@@ -29,7 +29,12 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 SDK_ROOT="${ANDROID_HOME:-$HOME/android-sdk}"
 CMDLINE_TOOLS_VERSION="11076708" # commandlinetools-linux-*_latest at time of writing
-PLATFORM="android-37"
+# "platforms;android-37" alone is not a real package -- the SDK repository
+# only ships versioned sub-releases (37.0, 37.1, 37.2, ...). 37.2 is the
+# version verified locally (confirmed present via `sdkmanager --list`);
+# compileSdk/targetSdk = 37 in android/gradle/libs.versions.toml is
+# satisfied by any 37.x platform package.
+PLATFORM="android-37.2"
 BUILD_TOOLS="37.0.0"
 
 mkdir -p "$SDK_ROOT/cmdline-tools"

@@ -29,7 +29,9 @@ The point of this repo is to prove, end to end, that:
   shim, real cross-compiled `.so`'s, and `demo-app-delivery` has been run on
   a real Android emulator showing live peer connections against the real
   `logos.dev` network. `release.yml` builds and publishes its APK from
-  scratch on every GitHub Release.
+  scratch on every GitHub Release — proven by the
+  [`v0.1.0-poc`](https://github.com/fryorcraken/logos-android-wrap-poc/releases/tag/v0.1.0-poc)
+  release, cut entirely by this pipeline with no manually-staged artifacts.
 - **`logos-storage`'s JNI shim does not exist yet** — Milestone 4 (writing
   `storage_jni.c`) has not started. `logos-glue` and `demo-app-full` are
   still Milestone-2-era stubs and do not build a working, runnable app.
@@ -183,9 +185,9 @@ today is **delivery-only** (storage's JNI shim doesn't exist yet — see
    cross-compile `liblogosdelivery.so`, `librln.so`, and the compiled
    `delivery_jni.c` shim from source, for `arm64-v8a` and `x86_64` (a
    matrix job, one per ABI). This includes bootstrapping the pinned Nim
-   2.2.6 toolchain (via `nim-src/logos-delivery`'s own `make deps`),
-   downloading Android NDK r27c directly, and cross-compiling `librln.so`
-   via `cross`/Docker.
+   2.2.6 toolchain and Nimble dependencies (via `nim-src/logos-delivery`'s
+   own `make deps`/`make build-deps`), downloading Android NDK r27c
+   directly, and cross-compiling `librln.so` via `cross`/Docker.
 2. Stages the resulting `.so`'s into
    `android/logos-delivery/src/main/jniLibs/<abi>/` via
    `scripts/stage-jnilibs.sh`, then builds `demo-app-delivery`'s release

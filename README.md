@@ -46,6 +46,61 @@ The point of this repo is to prove, end to end, that:
   are effectively all 64-bit regardless, so this is not considered
   blocking for the POC.
 
+### `demo-app-delivery`'s APK size, by component
+
+The [`v0.1.0-poc`](https://github.com/fryorcraken/logos-android-wrap-poc/releases/tag/v0.1.0-poc)
+release APK is **85.7 MB** (89,866,514 bytes). That's large for a demo app
+with one screen and a peer-count label — almost entirely because it bundles
+native code for **both** verified ABIs (`arm64-v8a` and `x86_64`) in a
+single, unsplit APK, not per-ABI APKs or an Android App Bundle. Measured
+directly from the released asset (`unzip -v`, which reports each entry's
+actual in-archive bytes — native `.so`s are stored uncompressed, everything
+else is DEFLATE-compressed):
+
+| Component | Bytes | Size | % of APK |
+|---|---:|---:|---:|
+| **Native libraries (`lib/**`), both ABIs combined** | 81,638,632 | 77.9 MB | 90.8% |
+| &nbsp;&nbsp;`lib/x86_64/liblogosdelivery.so` | 35,153,944 | 33.5 MB | 39.1% |
+| &nbsp;&nbsp;`lib/arm64-v8a/liblogosdelivery.so` | 33,092,912 | 31.6 MB | 36.8% |
+| &nbsp;&nbsp;`lib/x86_64/librln.so` | 6,911,952 | 6.6 MB | 7.7% |
+| &nbsp;&nbsp;`lib/arm64-v8a/librln.so` | 6,377,680 | 6.1 MB | 7.1% |
+| &nbsp;&nbsp;`lib/{arm64-v8a,x86_64}/libdelivery_jni.so` (our own shim) | 64,752 | 0.06 MB | 0.1% |
+| &nbsp;&nbsp;`lib/*/libandroidx.graphics.path.so` (Compose, all 4 ABIs) | 37,392 | 0.04 MB | <0.1% |
+| `classes.dex` + `classes2.dex` (Kotlin/Java bytecode) | 7,605,713 | 7.3 MB | 8.5% |
+| `resources.arsc` + `res/**` + everything else | ~530,000 | ~0.5 MB | ~0.6% |
+
+Takeaways:
+
+- **`liblogosdelivery.so` dominates**, at ~65 MB combined across both
+  ABIs (~76% of the whole APK) — the size of a full libp2p-based
+  messaging stack (relay, store, filter, lightpush, peer exchange,
+  RLN-relay, mix, discv5, etc.), not something this repo's build
+  controls; `scripts/stage-jnilibs.sh` does run `llvm-strip
+  --strip-unneeded` on it before packaging (see that script's own
+  comments), so this is already the *stripped* size.
+- **`librln.so`** (the Rust/zerokit RLN dependency) adds another ~12.7 MB
+  combined.
+- **This repo's own code is a rounding error**: `libdelivery_jni.so` (the
+  hand-written JNI shim) is under 65 KB combined across both ABIs, and the
+  Kotlin app code compiles to ~7.3 MB of bytecode (`classes.dex` +
+  `classes2.dex`, which is mostly Compose/AndroidX, not app logic).
+- **A real release build would ship per-ABI APKs or an AAB**, halving
+  this to roughly 45-48 MB per device by including only the one native
+  `.so` set that device actually needs — `demo-app-delivery`'s
+  `assembleRelease` intentionally builds a single universal APK for
+  simplicity in this POC's CI pipeline, not a splits/bundle config.
+- **Size is a property of this one library, not this repo's module
+  structure**: `logos-co/rfp`'s
+  [`integrating-logos-technology-stack.md`](https://github.com/logos-co/rfp/blob/rfp/lez-sdk-architecture/appendix/integrating-logos-technology-stack.md)
+  explicitly warns against a monolithic "liblogos"-style `.so` bundling
+  every component, citing "unnecessary 112+ MiB artefacts" for apps that
+  only need one piece — which is exactly the module-per-native-library
+  split this repo already implements (see "Why not one library with
+  build-time exclusion" below). `demo-app-delivery`'s ~78 MB of native
+  code is entirely `liblogosdelivery.so` + `librln.so` for delivery
+  alone — a `demo-app-storage`-only app would ship `libstorage.so`
+  instead, not all of it.
+
 ## This is a collection of independent Kotlin libraries, not one SDK dependency
 
 This repo publishes **four separate Kotlin/AAR artifacts** under the group
